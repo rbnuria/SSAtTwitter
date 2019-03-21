@@ -1,11 +1,16 @@
 import numpy as np
+import re
+import sklearn
+import tensorflow as tf
 
 def prepareData(train, dev, embeddings):	
 	'''
 	Almacenamiento de palabras en nuestro vocabulario -> Añadimos al vocabulario
 	aquellas palabras que estén en el subconjunto de los embeddings seleccionados 
-	(200000) + 2 de padding y unkown
 	'''
+
+	#Expresión regular para usuario
+	RE_TOKEN_USER = re.compile(r"(?<![A-Za-z0-9_!@#\$%&*])@(([A-Za-z0-9_]){20}(?!@))|(?<![A-Za-z0-9_!@#\$%&*])@(([A-Za-z0-9_]){1,19})(?![A-Za-z0-9_]*@)")
 
 	vocabulary = {}
 	vocabulary["PADDING"] = len(vocabulary)
@@ -13,8 +18,8 @@ def prepareData(train, dev, embeddings):
 
 	#Matriz de embeddings del vocabulario
 	embeddings_matrix = []
-	embeddings_matrix.append(np.zeros(300))
-	embeddings_matrix.append(np.random.uniform(-0.25, 0.25, 300))
+	embeddings_matrix.append(np.zeros(100))
+	embeddings_matrix.append(np.random.uniform(-0.25, 0.25, 100))
 
 	for word in embeddings.wv.vocab:
 		vocabulary[word] = len(vocabulary)
@@ -28,84 +33,100 @@ def prepareData(train, dev, embeddings):
 	for sentence in train:
 		wordIndices = []
 		for word in sentence:
-			#Si la palabra está en el vocabulario, asignamos su índice en él
+			if RE_TOKEN_USER.fullmatch(word):
+				word = "@user"
+
 			if word in vocabulary:
 				wordIndices.append(vocabulary[word])
 			else:
-				#Padding
-				if word == "-":
-					wordIndices.append(vocabulary["PADDING"])
-				#Desconocida
-				else:
-					wordIndices.append(vocabulary["UNKOWN"])
+				wordIndices.append(vocabulary["UNKOWN"])
 
 		train_idx.append(np.array(wordIndices))
 
 	for sentence in dev:
 		wordIndices = []
 		for word in sentence:
-			#Si tenemos embedding para la palabra
+			if RE_TOKEN_USER.fullmatch(word):
+				word = "@user"
+
 			if word in vocabulary:
 				wordIndices.append(vocabulary[word])
 			else:
-				#Padding
-				if word == "-":
-					wordIndices.append(vocabulary["PADDING"])
-				#Desconocida
-				else:
-					wordIndices.append(vocabulary["UNKOWN"])
+				wordIndices.append(vocabulary["UNKOWN"])
 
 		dev_idx.append(np.array(wordIndices))
 
 	return (train_idx, dev_idx, embeddings_matrix, vocabulary)
 
 
-def prepareDataTest(data_test, vocabulary):
+def prepareDataTest(test, vocabulary):
 	'''
 		Preparación de conjunto de test.
 	'''
 
-	data_test_idx = []
+	RE_TOKEN_USER = re.compile(r"(?<![A-Za-z0-9_!@#\$%&*])@(([A-Za-z0-9_]){20}(?!@))|(?<![A-Za-z0-9_!@#\$%&*])@(([A-Za-z0-9_]){1,19})(?![A-Za-z0-9_]*@)")
 
-	for sentence in data_test:
+	test_idx = []
+
+	for sentence in test:
 		wordIndices = []
 		for word in sentence:
-			#Si tenemos embedding para la palabra
+			if RE_TOKEN_USER.fullmatch(word):
+				word = "@user"
+
 			if word in vocabulary:
 				wordIndices.append(vocabulary[word])
 			else:
-				#Padding
-				if word == "-":
-					wordIndices.append(vocabulary["PADDING"])
-				#Desconocida
-				else:
-					wordIndices.append(vocabulary["UNKOWN"])
+				wordIndices.append(vocabulary["UNKOWN"])
 
-		data_test_idx.append(np.array(wordIndices))
+		test_idx.append(np.array(wordIndices))
 
-	return np.array(data_test_idx)
+	return (test_idx)
 
-def padding_truncate(training_sentences, max_length):
-	    """Amplia o recorta las oraciones de entrenamiento.
-	    
-	    Args:
-	        training_sentences: Lista de listas de enteros.
-	    -> En este caso solo ampliaría pues estamos tomando como tamaño la frase más larga     
-	    """
-	    
-	    for i in range(len(training_sentences)):
-	        sent_size = len(training_sentences[i])
-	        if sent_size > max_length:
-	            training_sentences[i] = training_sentences[i][:max_length]
-	        elif sent_size < max_length:
-	        	if(isinstance(training_sentences[i], list)):
-		        	training_sentences[i] += [0] * (max_length - sent_size)
-		        else:
-		        	list_sentence = training_sentences[i].tolist()
-		        	list_sentence += [0] * (max_length - sent_size)
-		        	training_sentences[i] = np.array(list_sentence)
+def maxLength(data):
+	'''
+		Función que calcula la long máxima de las oraciones de entrada.
+	'''
 
-	    return training_sentences 
+	max = 0
+
+	for sentence in data:
+		if len(sentence) > max:
+			max = len(sentence)
+
+	return max
+
+
+def padding_truncate(sentences, max_length):
+	'''
+		Amplía o recorta las oraciones en función de max_length
+	'''
+
+	for i in range(len(sentences)):
+		sent_size = len(sentences[i])
+
+		if sent_size > max_length:
+			sentences[i] = sentences[i][:max_length]
+		elif sent_size < max_length:
+			if(isinstance(sentences[i],list)):
+				sentences[i] += [0] * (max_length - sent_size)
+			else:
+				list_sentence = sentences[i].tolist()
+				list_sentence += [0] * (max_length - sent_size)
+				sentences[i] = np.array(list_sentence)
+
+	return sentences
+
+def polarityToString(pol):
+	if pol == 0:
+		return "P"
+	elif pol == 1:
+		return "NEU"
+	elif pol == 2:
+		return "N"
+	elif pol == 3:
+		return "NONE"
+
 
 
 def writeOutput(y_pred, id_, fichero):
@@ -113,9 +134,10 @@ def writeOutput(y_pred, id_, fichero):
 		Generación de fichero de salida
 	'''
 	
-	y_pred_tag = ["UNSAFE" if pred==0 else "SAFE" for pred in np.argmax(y_pred,axis=1)]
+	y_pred_tag = [polarityToString(pred) for pred in np.argmax(y_pred,axis=1)]
 	output_data = zip(id_, y_pred_tag)
 
 	with(open(fichero, 'w')) as f_test_out:
+		f_test_out.write("Id,Expected")
 		s_buff = "\n".join(["\t".join(list(label_pair)) for label_pair in output_data])
 		f_test_out.write(s_buff)
